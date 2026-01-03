@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn, JoinColumn } from 'typeorm';
 import { Chat } from './chat.entity';
 
 @Entity({ name: 'messages' })
@@ -24,6 +24,16 @@ export class Message {
     location?: { lat: number; lon: number };
     [key: string]: any;
   } | null;
+
+  @ManyToOne(() => Message, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'replyToId' })
+  replyTo?: Message | null;
+
+  @Column({ nullable: true })
+  replyToId?: string | null;
+
+  @Column({ default: false })
+  pinned: boolean;
 
   @CreateDateColumn()
   createdAt: Date;

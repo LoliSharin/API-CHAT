@@ -175,6 +175,8 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   async onTypingStart(@ConnectedSocket() client: Socket, @MessageBody() payload: { chatId: string }) {
     const userId = client.data.userId;
     if (!userId) return;
+    const allowed = await this.chatService.isUserInChat(userId, payload.chatId);
+    if (!allowed) return;
 
     client.to(`chat:${payload.chatId}`).emit('typing.update', {
       chatId: payload.chatId,
@@ -186,11 +188,60 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   async onTypingStop(@ConnectedSocket() client: Socket, @MessageBody() payload: { chatId: string }) {
     const userId = client.data.userId;
     if (!userId) return;
+    const allowed = await this.chatService.isUserInChat(userId, payload.chatId);
+    if (!allowed) return;
 
     client.to(`chat:${payload.chatId}`).emit('typing.update', {
       chatId: payload.chatId,
       userId,
       action: 'stop',
+    });
+  }
+
+  @SubscribeMessage('reaction.add')
+  async onReactionAdd(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: { messageId: string; type: string; chatId: string },
+  ) {
+    const userId = client.data.userId;
+    if (!userId) return;
+    await this.chatService.addReaction(userId, payload.messageId, payload.type);
+    this.server.to(`chat:${payload.chatId}`).emit('reaction.updated', {
+      messageId: payload.messageId,
+      userId,
+      type: payload.type,
+      action: 'add',
+    });
+  }
+
+  @SubscribeMessage('reaction.remove')
+  async onReactionRemove(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: { messageId: string; type: string; chatId: string },
+  ) {
+    const userId = client.data.userId;
+    if (!userId) return;
+    await this.chatService.removeReaction(userId, payload.messageId, payload.type);
+    this.server.to(`chat:${payload.chatId}`).emit('reaction.updated', {
+      messageId: payload.messageId,
+      userId,
+      type: payload.type,
+      action: 'remove',
+    });
+  }
+
+  @SubscribeMessage('message.pin')
+  async onMessagePin(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: { chatId: string; messageId: string; pin: boolean },
+  ) {
+    const userId = client.data.userId;
+    if (!userId) return;
+    const result = await this.chatService.pinMessage(payload.chatId, userId, payload.messageId, payload.pin);
+    this.server.to(`chat:${payload.chatId}`).emit('message.pinned', {
+      messageId: result.id,
+      pinned: result.pinned,
+      actorId: userId,
     });
   }
 }

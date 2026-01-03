@@ -1,89 +1,167 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Brackets, In, ILike, Repository } from 'typeorm';
 import { Chat } from '../entities/chat.entity';
 import { ChatParticipant } from '../entities/chat-participant.entity';
-import { Message } from '../entities/message.entity';
 import { ChatFile } from '../entities/chat-file.entity';
+import { Message } from '../entities/message.entity';
+import { MessageReaction } from '../entities/message-reaction.entity';
 import { FilesService } from '../files/files.service';
+import { NotificationService } from '../notifications/notification.service';
+
+type CreateChatDto = {
+  type: 'single' | 'group';
+  title?: string;
+  description?: string;
+  participants: string[];
+};
 
 @Injectable()
 export class ChatService {
   constructor(
-    @InjectRepository(Chat) private chatRepo: Repository<Chat>,
-    @InjectRepository(ChatParticipant) private partRepo: Repository<ChatParticipant>,
-    @InjectRepository(Message) private msgRepo: Repository<Message>,
-    @InjectRepository(ChatFile) private fileRepo: Repository<ChatFile>,
+    @InjectRepository(Chat) private readonly chatRepo: Repository<Chat>,
+    @InjectRepository(ChatParticipant) private readonly partRepo: Repository<ChatParticipant>,
+    @InjectRepository(Message) private readonly msgRepo: Repository<Message>,
+    @InjectRepository(ChatFile) private readonly fileRepo: Repository<ChatFile>,
+    @InjectRepository(MessageReaction) private readonly reactionRepo: Repository<MessageReaction>,
     private readonly filesService: FilesService,
+    private readonly notificationService: NotificationService,
   ) {}
 
-  
   async isUserInChat(userId: string, chatId: string) {
     const p = await this.partRepo.findOne({ where: { chat: { id: chatId }, userId } });
     return !!p;
   }
 
-  async createChat(
-    ownerId: string,
-    dto: {
-      type: 'single' | 'group';
-      title?: string; 
-      description?: string; 
-      participants: string[];
-    }){
-    // контракт вроде перед созданием чата
-    if (dto.type === 'single'){
-      const other = dto.participants?.[0]
-      if (!other){
-        throw new Error('нету чата в базе данных');
-      }
-      const existing = await this.partRepo.find({
-        where: {userId: In([ownerId, other])},
-        relations:['chat']
-      }) 
-      const found = existing
-      .map(p => p.chat)
-      .find(c => c.type === 'single') 
-      if(found) return found;   
-      //создаем чат в базе
-      const chat = this.chatRepo.create({
-        type: dto.type,
-        title: dto.title ?? null,
-        description: dto.description ?? null
-      })
-      const savedChat = await this.chatRepo.save(chat);
-      const uniqueParticipants =Array.from(new Set([ownerId, ...(dto.participants ??[])]))
-      const participantsEntites = uniqueParticipants.map(uid =>
-        this.partRepo.create({
-          chat:savedChat,
-          userId: uid,
-          role: uid == ownerId ? 'owner' : dto.type === 'group' ? 'participant' : 'participant'
-        })
-      );await this.partRepo.save(participantsEntites);
-      return{
-        chat: savedChat,
-        participants: participantsEntites
-      };
-    }
-      
+  private async getParticipant(chatId: string, userId: string) {
+    return this.partRepo.findOne({ where: { chat: { id: chatId }, userId } });
   }
 
-  async createMessage(senderId: string, chatId: string, encryptedPayloadBuffer: Buffer | null, metadata: any) {
+  private ensureGroup(chat: Chat) {
+    if (chat.type !== 'group') {
+      throw new ForbiddenException('Action allowed only in group chat');
+    }
+  }
+
+  private assertCanManageParticipants(actor: ChatParticipant | null) {
+    if (!actor || (actor.role !== 'owner' && actor.role !== 'admin')) {
+      throw new ForbiddenException('No rights to manage participants');
+    }
+  }
+
+  async createChat(ownerId: string, dto: CreateChatDto) {
+    if (dto.type === 'single') {
+      const other = dto.participants?.[0];
+      if (!other) {
+        throw new BadRequestException('Other user is required for single chat');
+      }
+
+      // ищем существующий single чат между двумя пользователями
+      const existing = await this.chatRepo
+        .createQueryBuilder('chat')
+        .leftJoinAndSelect('chat.participants', 'p')
+        .where('chat.type = :type', { type: 'single' })
+        .andWhere('p.userId IN (:...uids)', { uids: [ownerId, other] })
+        .getMany();
+
+      const found = existing.find((c) => {
+        const userIds = c.participants?.map((p) => p.userId) || [];
+        return userIds.includes(ownerId) && userIds.includes(other);
+      });
+      if (found) return found;
+
+      const chat = this.chatRepo.create({
+        type: 'single',
+        ownerId,
+        title: null,
+        description: null,
+      });
+      const savedChat = await this.chatRepo.save(chat);
+
+      const uniqueParticipants = Array.from(new Set([ownerId, other]));
+      const participantsEntities = uniqueParticipants.map((uid) =>
+        this.partRepo.create({
+          chat: savedChat,
+          userId: uid,
+          role: uid === ownerId ? 'owner' : 'participant',
+        }),
+      );
+      await this.partRepo.save(participantsEntities);
+      return savedChat;
+    }
+
+    // group
+    const chat = this.chatRepo.create({
+      type: 'group',
+      ownerId: ownerId,
+      title: dto.title ?? null,
+      description: dto.description ?? null,
+    });
+    const savedChat = await this.chatRepo.save(chat);
+    const uniqueParticipants = Array.from(new Set([ownerId, ...(dto.participants ?? [])]));
+    const participantsEntities = uniqueParticipants.map((uid) =>
+      this.partRepo.create({
+        chat: savedChat,
+        userId: uid,
+        role: uid === ownerId ? 'owner' : 'participant',
+      }),
+    );
+    await this.partRepo.save(participantsEntities);
+    await this.notificationService.notifyGroupCreated(
+      savedChat.id,
+      ownerId,
+      uniqueParticipants.filter((id) => id !== ownerId),
+    );
+    return savedChat;
+  }
+
+  async createMessage(
+    senderId: string,
+    chatId: string,
+    encryptedPayloadBuffer: Buffer | null,
+    metadata: any,
+  ) {
     const isIn = await this.isUserInChat(senderId, chatId);
     if (!isIn) throw new ForbiddenException('User not in chat');
+
+    const replyToId = metadata?.replyTo ?? null;
+    if (replyToId) {
+      const replyMsg = await this.msgRepo.findOne({ where: { id: replyToId }, relations: ['chat'] });
+      if (!replyMsg || replyMsg.chat.id !== chatId) {
+        throw new ForbiddenException('Reply message not accessible');
+      }
+    }
+
+    const attachments: string[] = metadata?.attachments || [];
+    if (attachments.length > 0) {
+      // проверяем, что вложения принадлежат этому чату или загружены пользователем
+      const files = await this.fileRepo.find({ where: { id: In(attachments) }, relations: ['chat'] });
+      if (files.length !== attachments.length) {
+        throw new NotFoundException('One or more attachments not found');
+      }
+      for (const f of files) {
+        if (f.uploaderId !== senderId && (!f.chat || f.chat.id !== chatId)) {
+          throw new ForbiddenException(`No access to attachment ${f.id}`);
+        }
+      }
+    }
 
     const msg = this.msgRepo.create({
       chat: { id: chatId } as any,
       senderId,
       encryptedPayload: encryptedPayloadBuffer,
-      metadata
+      metadata,
+      replyTo: replyToId ? ({ id: replyToId } as any) : null,
+      replyToId: replyToId ?? null,
+      pinned: false,
     });
     const saved = await this.msgRepo.save(msg);
 
-    const attachments: string[] = metadata?.attachments || [];
     if (attachments && attachments.length > 0) {
       await this.filesService.attachFilesToMessage(attachments, saved.id);
     }
+
+    await this.notificationService.notifyMessageSent(chatId, saved.id, senderId);
 
     return {
       id: saved.id,
@@ -91,10 +169,15 @@ export class ChatService {
       senderId,
       metadata: saved.metadata,
       createdAt: saved.createdAt,
-      encryptedPayload: encryptedPayloadBuffer ? encryptedPayloadBuffer.toString('base64') : null
+      encryptedPayload: encryptedPayloadBuffer ? encryptedPayloadBuffer.toString('base64') : null,
+      replyToId: saved.replyToId,
+      pinned: saved.pinned,
     };
   }
+
   async joinChat(userId: string, chatId: string) {
+    const chat = await this.chatRepo.findOne({ where: { id: chatId } });
+    if (!chat) throw new NotFoundException('Chat not found');
     const exists = await this.partRepo.findOne({ where: { chat: { id: chatId }, userId } });
     if (exists) return exists;
     const part = this.partRepo.create({ chat: { id: chatId } as any, userId, role: 'participant' });
@@ -111,138 +194,236 @@ export class ChatService {
     return this.partRepo.find({ where: { chat: { id: chatId } } });
   }
 
-  
   async markMessageDelivered(messageId: string, userId: string) {
-    
-    const msg = await this.msgRepo.findOne({ where: { id: messageId } });
-    if (!msg) throw new NotFoundException('не существует такого сообщения');
+    const msg = await this.msgRepo.findOne({ where: { id: messageId }, relations: ['chat'] });
+    if (!msg) throw new NotFoundException('Message not found');
+    const inChat = await this.isUserInChat(userId, msg.chat.id);
+    if (!inChat) throw new ForbiddenException('User not in chat');
     await this.msgRepo.query(
-      `INSERT INTO message_read_status (message_id, user_id, read_at, delivered_at)
+      `INSERT INTO message_read_status ("messageId", "userId", "readAt", "deliveredAt")
        VALUES ($1, $2, NULL, now())
-       ON CONFLICT (message_id, user_id)
-       DO UPDATE SET delivered_at = now()`,
+       ON CONFLICT ("messageId", "userId")
+       DO UPDATE SET "deliveredAt" = now()`,
       [messageId, userId],
     );
   }
 
   async markMessageRead(messageId: string, userId: string) {
-    const msg = await this.msgRepo.findOne({ where: { id: messageId } });
-    if (!msg) throw new NotFoundException('не существует такого сообщения');
+    const msg = await this.msgRepo.findOne({ where: { id: messageId }, relations: ['chat'] });
+    if (!msg) throw new NotFoundException('Message not found');
+    const inChat = await this.isUserInChat(userId, msg.chat.id);
+    if (!inChat) throw new ForbiddenException('User not in chat');
     await this.msgRepo.query(
-      `INSERT INTO message_read_status (message_id, user_id, read_at, delivered_at)
+      `INSERT INTO message_read_status ("messageId", "userId", "readAt", "deliveredAt")
        VALUES ($1, $2, now(), now())
-       ON CONFLICT (message_id, user_id)
-       DO UPDATE SET read_at = now()`,
+       ON CONFLICT ("messageId", "userId")
+       DO UPDATE SET "readAt" = now()`,
       [messageId, userId],
     );
   }
+
   async listChatsForUser(userId: string) {
-  
-  const parts = await this.partRepo.find({
-    where: { userId },
-    relations: ['chat'],
-    order: { id: 'ASC' },
-  });
-
-  const result = [];
-  for (const p of parts) {
-    
-    const last = await this.msgRepo.findOne({
-      where: { chat: { id: p.chat.id } },
-      order: { createdAt: 'DESC' },
+    const parts = await this.partRepo.find({
+      where: { userId },
+      relations: ['chat'],
+      order: { id: 'ASC' },
     });
 
-    result.push({
-      chat: p.chat,
-      role: p.role,
-      lastMessage: last
-        ? {
-            id: last.id,
-            senderId: last.senderId,
-            metadata: last.metadata,
-            createdAt: last.createdAt,
-          }
-        : null,
-    });
-  }
+    const result = [];
+    for (const p of parts) {
+      const last = await this.msgRepo.findOne({
+        where: { chat: { id: p.chat.id } },
+        order: { createdAt: 'DESC' },
+      });
 
-  return result;
-}
-
-
-//Добавить участника в чат (групповой).
-//Право: только owner или admin могут добавлять (в простом варианте) и удалаять тоже.
-
-async addParticipant(chatId: string, actorUserId: string, userIdToAdd: string) {
-  // Проверяем, что чат существует
-  const chat = await this.chatRepo.findOne({ where: { id: chatId } });
-  if (!chat) throw new NotFoundException('Chat not found');
-
-  if (chat.type !== 'group') {
-    throw new ForbiddenException('Cannot add participants to single chat');
-  }
-
-  // Проверяем права актёра
-  const actor = await this.partRepo.findOne({
-    where: { chat: { id: chatId }, userId: actorUserId },
-  });
-  if (!actor) throw new ForbiddenException('Actor is not participant');
-  if (actor.role !== 'owner' && actor.role !== 'admin') {
-    throw new ForbiddenException('No rights to add participants');
-  }
-
-  // Не добавляем, если уже есть
-  const existing = await this.partRepo.findOne({
-    where: { chat: { id: chatId }, userId: userIdToAdd },
-  });
-  if (existing) return existing;
-
-  const part = this.partRepo.create({
-    chat: { id: chatId } as any,
-    userId: userIdToAdd,
-    role: 'participant',
-  });
-  return this.partRepo.save(part);
-}
-
-
-//Удалить участника из чата.
-async removeParticipant(chatId: string, actorUserId: string, userIdToRemove: string) {
-  const chat = await this.chatRepo.findOne({ where: { id: chatId } });
-  if (!chat) throw new NotFoundException('Chat not found');
-
-  if (chat.type !== 'group') {
-    throw new ForbiddenException('Cannot remove participants from single chat');
-  }
-
-  const actor = await this.partRepo.findOne({
-    where: { chat: { id: chatId }, userId: actorUserId },
-  });
-  if (!actor) throw new ForbiddenException('Actor is not participant');
-
-  // Найдём цель
-  const target = await this.partRepo.findOne({
-    where: { chat: { id: chatId }, userId: userIdToRemove },
-  });
-  if (!target) throw new NotFoundException('Participant not found');
-  if (target.role === 'owner') {
-    throw new ForbiddenException('Cannot remove owner');
-  }
-
-  // Разрешаем:
-  //  Owner может удалить любого (кроме себя, выше проверка)
-  //  Admin может удалить только participant (не другого admin и не owner)
-  if (actor.role === 'owner') {
-    
-    return this.partRepo.remove(target);
-  } else if (actor.role === 'admin') {
-    if (target.role === 'participant') {
-      return this.partRepo.remove(target);
-    } else {
-      throw new ForbiddenException('Admin cannot remove other admins or owner');
+      result.push({
+        chat: p.chat,
+        role: p.role,
+        lastMessage: last
+          ? {
+              id: last.id,
+              senderId: last.senderId,
+              metadata: last.metadata,
+              createdAt: last.createdAt,
+              pinned: last.pinned,
+            }
+          : null,
+      });
     }
-  } else {
-    throw new ForbiddenException('No rights to remove participants');
+
+    return result;
   }
-}
+
+  async addParticipant(chatId: string, actorUserId: string, userIdToAdd: string) {
+    const chat = await this.chatRepo.findOne({ where: { id: chatId } });
+    if (!chat) throw new NotFoundException('Chat not found');
+    this.ensureGroup(chat);
+
+    const actor = await this.getParticipant(chatId, actorUserId);
+    this.assertCanManageParticipants(actor);
+
+    const existing = await this.partRepo.findOne({
+      where: { chat: { id: chatId }, userId: userIdToAdd },
+    });
+    if (existing) return existing;
+
+    const part = this.partRepo.create({
+      chat: { id: chatId } as any,
+      userId: userIdToAdd,
+      role: 'participant',
+    });
+    return this.partRepo.save(part);
+  }
+
+  async removeParticipant(chatId: string, actorUserId: string, userIdToRemove: string) {
+    const chat = await this.chatRepo.findOne({ where: { id: chatId } });
+    if (!chat) throw new NotFoundException('Chat not found');
+    this.ensureGroup(chat);
+
+    const actor = await this.getParticipant(chatId, actorUserId);
+    if (!actor) throw new ForbiddenException('Actor is not participant');
+
+    const target = await this.partRepo.findOne({
+      where: { chat: { id: chatId }, userId: userIdToRemove },
+    });
+    if (!target) throw new NotFoundException('Participant not found');
+    if (target.role === 'owner') {
+      throw new ForbiddenException('Cannot remove owner');
+    }
+
+    if (actor.role === 'owner') {
+      return this.partRepo.remove(target);
+    } else if (actor.role === 'admin') {
+      if (target.role === 'participant') {
+        return this.partRepo.remove(target);
+      } else {
+        throw new ForbiddenException('Admin cannot remove other admins or owner');
+      }
+    } else {
+      throw new ForbiddenException('No rights to remove participants');
+    }
+  }
+
+  async setAdmin(chatId: string, actorId: string, userId: string, makeAdmin: boolean) {
+    const chat = await this.chatRepo.findOne({ where: { id: chatId } });
+    if (!chat) throw new NotFoundException('Chat not found');
+    this.ensureGroup(chat);
+
+    const actor = await this.getParticipant(chatId, actorId);
+    if (!actor || actor.role !== 'owner') {
+      throw new ForbiddenException('Only owner can change admin rights');
+    }
+
+    const target = await this.getParticipant(chatId, userId);
+    if (!target) throw new NotFoundException('Participant not found');
+    if (target.role === 'owner') throw new ForbiddenException('Cannot change owner role');
+
+    target.role = makeAdmin ? 'admin' : 'participant';
+    return this.partRepo.save(target);
+  }
+
+  async updateGroupInfo(chatId: string, actorId: string, data: { title?: string; description?: string }) {
+    const chat = await this.chatRepo.findOne({ where: { id: chatId } });
+    if (!chat) throw new NotFoundException('Chat not found');
+    this.ensureGroup(chat);
+
+    const actor = await this.getParticipant(chatId, actorId);
+    if (!actor || (actor.role !== 'owner' && actor.role !== 'admin')) {
+      throw new ForbiddenException('No rights to update group');
+    }
+
+    chat.title = data.title ?? chat.title;
+    chat.description = data.description ?? chat.description;
+    return this.chatRepo.save(chat);
+  }
+
+  async pinMessage(chatId: string, actorId: string, messageId: string, pin: boolean) {
+    const chat = await this.chatRepo.findOne({ where: { id: chatId } });
+    if (!chat) throw new NotFoundException('Chat not found');
+    this.ensureGroup(chat);
+
+    const actor = await this.getParticipant(chatId, actorId);
+    if (!actor || (actor.role !== 'owner' && actor.role !== 'admin')) {
+      throw new ForbiddenException('No rights to pin messages');
+    }
+
+    const msg = await this.msgRepo.findOne({ where: { id: messageId }, relations: ['chat'] });
+    if (!msg || msg.chat.id !== chatId) throw new NotFoundException('Message not found');
+
+    msg.pinned = pin;
+    await this.msgRepo.save(msg);
+    return { id: msg.id, pinned: msg.pinned };
+  }
+
+  async addReaction(userId: string, messageId: string, type: string) {
+    const msg = await this.msgRepo.findOne({ where: { id: messageId }, relations: ['chat'] });
+    if (!msg) throw new NotFoundException('Message not found');
+
+    const inChat = await this.isUserInChat(userId, msg.chat.id);
+    if (!inChat) throw new ForbiddenException('User not in chat');
+
+    const existing = await this.reactionRepo.findOne({
+      where: { message: { id: messageId }, userId, type },
+    });
+    if (existing) return existing;
+
+    const reaction = this.reactionRepo.create({
+      message: { id: messageId } as any,
+      userId,
+      type,
+    });
+    const saved = await this.reactionRepo.save(reaction);
+    await this.notificationService.notifyReaction(msg.chat.id, messageId, userId, type, 'add');
+    return saved;
+  }
+
+  async removeReaction(userId: string, messageId: string, type: string) {
+    const msg = await this.msgRepo.findOne({ where: { id: messageId }, relations: ['chat'] });
+    if (!msg) throw new NotFoundException('Message not found');
+    const inChat = await this.isUserInChat(userId, msg.chat.id);
+    if (!inChat) throw new ForbiddenException('User not in chat');
+    const existing = await this.reactionRepo.findOne({
+      where: { message: { id: messageId }, userId, type },
+    });
+    if (!existing) return;
+    await this.reactionRepo.remove(existing);
+    await this.notificationService.notifyReaction(msg.chat.id, messageId, userId, type, 'remove');
+  }
+
+  async search(userId: string, query: string) {
+    if (!query) return { chats: [], messages: [] };
+
+    const chatIds = (
+      await this.partRepo.find({
+        where: { userId },
+        relations: ['chat'],
+      })
+    ).map((p) => p.chat.id);
+
+    if (chatIds.length === 0) return { chats: [], messages: [] };
+
+    const chats = await this.chatRepo.find({
+      where: [
+        { id: In(chatIds), title: ILike(`%${query}%`) },
+        { id: In(chatIds), description: ILike(`%${query}%`) },
+      ],
+    });
+
+    const messages = await this.msgRepo
+      .createQueryBuilder('m')
+      .where('m.chatId IN (:...chatIds)', { chatIds })
+      .andWhere(
+        new Brackets((qb) => {
+          qb.where("m.metadata ->> 'text' ILIKE :q", { q: `%${query}%` }).orWhere(
+            'm.senderId ILIKE :q',
+            { q: `%${query}%` },
+          );
+        }),
+      )
+      .orderBy('m.createdAt', 'DESC')
+      .limit(50)
+      .getMany();
+
+    return { chats, messages };
+  }
 }

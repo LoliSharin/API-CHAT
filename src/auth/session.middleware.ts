@@ -16,7 +16,16 @@ export class SessionMiddleware implements NestMiddleware {
 
   async use(req: Request, res: Response, next: NextFunction) {
     const cookies = cookie.parse(req.headers.cookie || '');
-    const sessionId = cookies['sessionId'];
+    let sessionId = cookies['sessionId'];
+
+    // Также поддерживаем Authorization: Bearer <sessionId>
+    if (!sessionId) {
+      const authHeader = req.headers['authorization'];
+      if (authHeader && typeof authHeader === 'string') {
+        const [, token] = authHeader.split(' ');
+        sessionId = token;
+      }
+    }
 
     if (sessionId) {
       const session = await this.sessionService.getUserBySession(sessionId);
