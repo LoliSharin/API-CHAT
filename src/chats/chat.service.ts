@@ -175,6 +175,43 @@ export class ChatService {
     };
   }
 
+  async listMessages(
+    userId: string,
+    chatId: string,
+    opts: { limit?: number; before?: string } = {},
+  ) {
+    const inChat = await this.isUserInChat(userId, chatId);
+    if (!inChat) throw new ForbiddenException('User not in chat');
+
+    const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
+    const qb = this.msgRepo
+      .createQueryBuilder('m')
+      .where('m.chatId = :chatId', { chatId })
+      .orderBy('m.createdAt', 'DESC')
+      .addOrderBy('m.id', 'DESC')
+      .take(limit);
+
+    if (opts.before) {
+      const beforeDate = new Date(opts.before);
+      if (!Number.isNaN(beforeDate.getTime())) {
+        qb.andWhere('m.createdAt < :before', { before: beforeDate.toISOString() });
+      }
+    }
+
+    const rows = await qb.getMany();
+
+    return rows.map((m) => ({
+      id: m.id,
+      chatId,
+      senderId: m.senderId,
+      metadata: m.metadata,
+      createdAt: m.createdAt,
+      encryptedPayload: m.encryptedPayload ? m.encryptedPayload.toString('base64') : null,
+      replyToId: m.replyToId ?? null,
+      pinned: m.pinned,
+    }));
+  }
+  
   async joinChat(userId: string, chatId: string) {
     const chat = await this.chatRepo.findOne({ where: { id: chatId } });
     if (!chat) throw new NotFoundException('Chat not found');

@@ -169,6 +169,26 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     });
   }
 
+  @SubscribeMessage('messages.list')
+  async onMessagesList(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: { chatId: string; limit?: number; before?: string },
+  ) {
+    const userId = client.data.userId;
+    if (!userId) return;
+    if (!payload?.chatId) {
+      client.emit('error', { message: 'chatId required' });
+      return;
+    }
+
+    const messages = await this.chatService.listMessages(userId, payload.chatId, {
+      limit: payload.limit,
+      before: payload.before,
+    });
+
+    client.emit('messages.list', { chatId: payload.chatId, items: messages });
+  }
+
  
   // начало/остановка набора текста
   @SubscribeMessage('typing.start')
