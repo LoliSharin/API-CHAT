@@ -14,7 +14,7 @@ import {
 } from '@nestjs/common';
 import { ChatService } from './chat.service';
 import { Request } from 'express';
-import { CryptoService } from '../crypto/crypto.service';
+import { CryptoService } from './massage-crypto.service';
 
 class CreateChatDto {
   type: 'single' | 'group';
@@ -188,10 +188,5 @@ export class ChatController {
     const actor = req.user;
     if (!actor) throw new ForbiddenException('Unauthorized');
     return this.chatService.search(actor.id, q);
-  }
-
-  @Get('public-key')
-  getPublicKey() {
-    return { publicKey: this.cryptoService.getPublicKey() };
   }
 }

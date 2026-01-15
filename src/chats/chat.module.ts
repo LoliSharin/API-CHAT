@@ -9,10 +9,9 @@ import { ChatController } from './chat.controller';
 import { ChatGateway } from './chat.gateway';
 import { ChatFile } from '../entities/chat-file.entity';
 import { SessionService } from '../session/session.service';
-import { CryptoService } from '../crypto/crypto.service';
+import { CryptoService } from './massage-crypto.service';
 import { NotificationService } from '../notifications/notification.service';
 import { FilesModule } from '../files/files.module';
-
 
 @Module({
   imports: [TypeOrmModule.forFeature([Chat, ChatParticipant, Message, ChatFile, MessageReaction]), FilesModule],

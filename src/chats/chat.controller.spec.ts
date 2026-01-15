@@ -3,7 +3,7 @@ import { Test } from '@nestjs/testing';
 import { Request } from 'express';
 import { ChatController } from './chat.controller';
 import { ChatService } from './chat.service';
-import { CryptoService } from '../crypto/crypto.service';
+import { CryptoService } from './massage-crypto.service';
 
 describe('ChatController', () => {
   let controller: ChatController;

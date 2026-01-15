@@ -1,5 +1,5 @@
 import { io } from 'socket.io-client';
-const sessionId = '6f86cab0-3b4e-44a0-b06c-c7aa5452e261'// Этот айдишник сессии владеет чатом с id '1e31c613-e5b2-4410-a057-d81ca084f68b'
+const sessionId = '6f86cab0-3b4e-44a0-b06c-c7aa5452e261'// Этот айдишник сессии владеет чатом 
 const socket = io('http://localhost:3000', {
   withCredentials: true,
   extraHeaders: { Cookie: `sessionId=${sessionId}` },

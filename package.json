@@ -2,7 +2,7 @@
   "name": "api-chat",
   "version": "0.1.0",
   "private": true,
-  "description": "Microservice API Chat - NestJS + Prisma + Postgres",
+  "description": "Microservice API Chat",
   "main": "dist/main.js",
   "scripts": {
     "start": "nest start",

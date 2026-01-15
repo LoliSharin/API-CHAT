@@ -7,3 +7,5 @@ Dockerfile
 docker-compose.yml
 **/node_modules
 **/.git
+TestChat1.ts
+TestChat2.ts 

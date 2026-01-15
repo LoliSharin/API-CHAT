@@ -131,7 +131,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const saved = await this.chatService.createMessage(userId, chatId, buff, metadata || {});
 
     // бродкаст сообщения
-    this.server.to(`chat:${chatId}`).emit('message.new', saved);
+    this.server.to(`chat:${chatId}`).emit('ъ\хъmessage.new', saved);
 
 
     client.emit('message.sent', { id: saved.id, chatId });
