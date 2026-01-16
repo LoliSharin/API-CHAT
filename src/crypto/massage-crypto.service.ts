@@ -17,9 +17,7 @@ export class CryptoService {
       cipher.update(Buffer.from(plaintext, "utf8")),
       cipher.final(),
     ]);
-
     const tag = cipher.getAuthTag(); // 16 дефолтный 
-
     return {
       iv_b64: iv.toString("base64"),
       tag_b64: tag.toString("base64"),

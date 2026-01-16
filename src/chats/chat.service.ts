@@ -8,6 +8,7 @@ import { Message } from '../entities/message.entity';
 import { MessageReaction } from '../entities/message-reaction.entity';
 import { FilesService } from '../files/files.service';
 import { NotificationService } from '../notifications/notification.service';
+import { ChatKeyService } from '../crypto/chat-key.service';
 
 type CreateChatDto = {
   type: 'single' | 'group';
@@ -26,6 +27,7 @@ export class ChatService {
     @InjectRepository(MessageReaction) private readonly reactionRepo: Repository<MessageReaction>,
     private readonly filesService: FilesService,
     private readonly notificationService: NotificationService,
+    private readonly chatKeyService: ChatKeyService,
   ) {}
 
   async isUserInChat(userId: string, chatId: string) {
@@ -77,6 +79,10 @@ export class ChatService {
         description: null,
       });
       const savedChat = await this.chatRepo.save(chat);
+      
+      //здесь мы создаем dek ключ для чата b pfgbcsdftv d ,l
+      await this.chatKeyService.createInitialChatKey(chat.id);
+
 
       const uniqueParticipants = Array.from(new Set([ownerId, other]));
       const participantsEntities = uniqueParticipants.map((uid) =>
@@ -113,6 +119,7 @@ export class ChatService {
       uniqueParticipants.filter((id) => id !== ownerId),
     );
     return savedChat;
+
   }
 
   async createMessage(

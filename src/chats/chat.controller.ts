@@ -14,7 +14,7 @@ import {
 } from '@nestjs/common';
 import { ChatService } from './chat.service';
 import { Request } from 'express';
-import { CryptoService } from './massage-crypto.service';
+import { CryptoService } from '../crypto/massage-crypto.service';
 
 class CreateChatDto {
   type: 'single' | 'group';

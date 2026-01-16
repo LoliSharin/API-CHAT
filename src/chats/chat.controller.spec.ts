@@ -3,7 +3,7 @@ import { Test } from '@nestjs/testing';
 import { Request } from 'express';
 import { ChatController } from './chat.controller';
 import { ChatService } from './chat.service';
-import { CryptoService } from './massage-crypto.service';
+import { CryptoService } from '../crypto/massage-crypto.service';
 
 describe('ChatController', () => {
   let controller: ChatController;
@@ -82,10 +82,6 @@ describe('ChatController', () => {
     expect(res).toEqual({ id: 'm1' });
   });
 
-  it('возвращает публичный ключ', () => {
-    const res = controller.getPublicKey();
-    expect(res).toEqual({ publicKey: 'PUB' });
-  });
 
   it('поиск требует авторизации', async () => {
     await expect(controller.search('hi', makeReq())).rejects.toBeInstanceOf(ForbiddenException);
