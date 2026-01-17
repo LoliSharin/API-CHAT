@@ -37,4 +37,16 @@ export class Message {
 
   @CreateDateColumn()
   createdAt: Date;
+
+  @Column("text", { nullable: true })
+  ciphertextB64: string | null;
+
+  @Column("text", { nullable: true })
+  ivB64: string | null;
+
+  @Column("text", { nullable: true })
+  tagB64: string | null;
+
+  @Column("int", { nullable: true })
+  keyVersion: number | null;
 }

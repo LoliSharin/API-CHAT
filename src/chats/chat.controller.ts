@@ -14,7 +14,6 @@ import {
 } from '@nestjs/common';
 import { ChatService } from './chat.service';
 import { Request } from 'express';
-import { CryptoService } from '../crypto/massage-crypto.service';
 
 class CreateChatDto {
   type: 'single' | 'group';
@@ -39,10 +38,7 @@ class UpdateGroupDto {
 
 @Controller('api/chats')
 export class ChatController {
-  constructor(
-    private readonly chatService: ChatService,
-    private readonly cryptoService: CryptoService,
-  ) {}
+  constructor(private readonly chatService: ChatService) {}
 
   @Post()
   @UsePipes(new ValidationPipe({ whitelist: true }))

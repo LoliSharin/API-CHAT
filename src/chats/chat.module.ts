@@ -9,13 +9,12 @@ import { ChatController } from './chat.controller';
 import { ChatGateway } from './chat.gateway';
 import { ChatFile } from '../entities/chat-file.entity';
 import { SessionService } from '../session/session.service';
-import { CryptoService } from '../crypto/massage-crypto.service';
 import { NotificationService } from '../notifications/notification.service';
 import { FilesModule } from '../files/files.module';
 
 @Module({
   imports: [TypeOrmModule.forFeature([Chat, ChatParticipant, Message, ChatFile, MessageReaction]), FilesModule],
-  providers: [ChatService, ChatGateway, SessionService, CryptoService, NotificationService],
+  providers: [ChatService, ChatGateway, SessionService, NotificationService],
   controllers: [ChatController],
   exports: [ChatService]
 })

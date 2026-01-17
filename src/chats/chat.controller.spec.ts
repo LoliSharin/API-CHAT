@@ -3,12 +3,10 @@ import { Test } from '@nestjs/testing';
 import { Request } from 'express';
 import { ChatController } from './chat.controller';
 import { ChatService } from './chat.service';
-import { CryptoService } from '../crypto/massage-crypto.service';
 
 describe('ChatController', () => {
   let controller: ChatController;
   let service: jest.Mocked<ChatService>;
-  let crypto: jest.Mocked<CryptoService>;
 
   const serviceMock = (): jest.Mocked<ChatService> =>
     ({
@@ -30,13 +28,6 @@ describe('ChatController', () => {
       search: jest.fn(),
     }) as any;
 
-  const cryptoMock = (): jest.Mocked<CryptoService> =>
-    ({
-      getPublicKey: jest.fn().mockReturnValue('PUB'),
-      encryptWithPublic: jest.fn(),
-      decryptWithPrivate: jest.fn(),
-    }) as any;
-
   const makeReq = (userId?: string) =>
     ({
       user: userId ? { id: userId } : undefined,
@@ -47,13 +38,11 @@ describe('ChatController', () => {
       controllers: [ChatController],
       providers: [
         { provide: ChatService, useValue: serviceMock() },
-        { provide: CryptoService, useValue: cryptoMock() },
       ],
     }).compile();
 
     controller = module.get(ChatController);
     service = module.get(ChatService) as jest.Mocked<ChatService>;
-    crypto = module.get(CryptoService) as jest.Mocked<CryptoService>;
   });
 
   it('создает чат', async () => {

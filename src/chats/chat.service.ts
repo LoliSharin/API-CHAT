@@ -9,6 +9,8 @@ import { MessageReaction } from '../entities/message-reaction.entity';
 import { FilesService } from '../files/files.service';
 import { NotificationService } from '../notifications/notification.service';
 import { ChatKeyService } from '../crypto/chat-key.service';
+import { CryptoService } from '../crypto/message-crypto.service'; 
+import { randomUUID } from "crypto"; 
 
 type CreateChatDto = {
   type: 'single' | 'group';
@@ -28,7 +30,8 @@ export class ChatService {
     private readonly filesService: FilesService,
     private readonly notificationService: NotificationService,
     private readonly chatKeyService: ChatKeyService,
-  ) {}
+    private readonly cryptoService: CryptoService,
+  ){}
 
   async isUserInChat(userId: string, chatId: string) {
     const p = await this.partRepo.findOne({ where: { chat: { id: chatId }, userId } });
@@ -50,7 +53,6 @@ export class ChatService {
       throw new ForbiddenException('No rights to manage participants');
     }
   }
-
   async createChat(ownerId: string, dto: CreateChatDto) {
     if (dto.type === 'single') {
       const other = dto.participants?.[0];
@@ -128,6 +130,7 @@ export class ChatService {
     encryptedPayloadBuffer: Buffer | null,
     metadata: any,
   ) {
+    //проверки
     const isIn = await this.isUserInChat(senderId, chatId);
     if (!isIn) throw new ForbiddenException('User not in chat');
 
@@ -153,7 +156,25 @@ export class ChatService {
       }
     }
 
+    // шифрование 
+    const messageId = randomUUID();
+    const { dek, version } = await this.chatKeyService.getActiveDek(chatId);
+    const aad = `chat:${chatId}|msg:${messageId}|sender:${senderId}|v:${version}`;
+    let ciphertextB64: string | null = null;
+    let ivB64: string | null = null;
+    let tagB64: string | null = null;
+    let keyVersion: number | null = null
+    if (encryptedPayloadBuffer && encryptedPayloadBuffer.length > 0) {
+      const enc = this.cryptoService.encryptBytes(encryptedPayloadBuffer, dek, aad);
+      ciphertextB64 = enc.ciphertext.toString("base64");
+      ivB64 = enc.iv.toString("base64");
+      tagB64 = enc.tag.toString("base64");
+      keyVersion = version;
+    }
+
+    //запись в бд
     const msg = this.msgRepo.create({
+      id: messageId,
       chat: { id: chatId } as any,
       senderId,
       encryptedPayload: encryptedPayloadBuffer,
@@ -161,7 +182,12 @@ export class ChatService {
       replyTo: replyToId ? ({ id: replyToId } as any) : null,
       replyToId: replyToId ?? null,
       pinned: false,
+      ciphertextB64,
+      ivB64,
+      tagB64,
+      keyVersion,
     });
+
     const saved = await this.msgRepo.save(msg);
 
     if (attachments && attachments.length > 0) {
@@ -176,7 +202,7 @@ export class ChatService {
       senderId,
       metadata: saved.metadata,
       createdAt: saved.createdAt,
-      encryptedPayload: encryptedPayloadBuffer ? encryptedPayloadBuffer.toString('base64') : null,
+      payload: encryptedPayloadBuffer ? encryptedPayloadBuffer.toString("base64") : null,
       replyToId: saved.replyToId,
       pinned: saved.pinned,
     };
