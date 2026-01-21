@@ -12,9 +12,6 @@ export class Message {
   @Column()
   senderId: string;
 
-  @Column({ type: 'bytea', nullable: true })
-  encryptedPayload: Buffer | null; 
-
   @Column({ type: 'jsonb', nullable: true })
   metadata: {
     text?: string;

@@ -11,7 +11,7 @@ export class ChatKeyService {
   constructor(
     @InjectRepository(ChatKeyEntity) private readonly chatKeysRepo: Repository<ChatKeyEntity>,
     private readonly keyWrappingService: KeyWrappingService,
-  ) {
+  о) {
     const raw = process.env.MASTER_KEK_B64;
     if (!raw) throw new Error("MASTER_KEK_B64 не найдена");
     this.kek = Buffer.from(raw, "base64");

@@ -53,6 +53,10 @@ export class ChatService {
       throw new ForbiddenException('No rights to manage participants');
     }
   }
+
+  private buildMessageAad(chatId: string, messageId: string, senderId: string, version: number) {
+    return `chat:${chatId}|msg:${messageId}|sender:${senderId}|v:${version}`;
+  }
   async createChat(ownerId: string, dto: CreateChatDto) {
     if (dto.type === 'single') {
       const other = dto.participants?.[0];
@@ -159,7 +163,7 @@ export class ChatService {
     // шифрование 
     const messageId = randomUUID();
     const { dek, version } = await this.chatKeyService.getActiveDek(chatId);
-    const aad = `chat:${chatId}|msg:${messageId}|sender:${senderId}|v:${version}`;
+    const aad = this.buildMessageAad(chatId, messageId, senderId, version);
     let ciphertextB64: string | null = null;
     let ivB64: string | null = null;
     let tagB64: string | null = null;
@@ -177,7 +181,6 @@ export class ChatService {
       id: messageId,
       chat: { id: chatId } as any,
       senderId,
-      encryptedPayload: encryptedPayloadBuffer,
       metadata,
       replyTo: replyToId ? ({ id: replyToId } as any) : null,
       replyToId: replyToId ?? null,
@@ -233,16 +236,43 @@ export class ChatService {
 
     const rows = await qb.getMany();
 
-    return rows.map((m) => ({
-      id: m.id,
-      chatId,
-      senderId: m.senderId,
-      metadata: m.metadata,
-      createdAt: m.createdAt,
-      encryptedPayload: m.encryptedPayload ? m.encryptedPayload.toString('base64') : null,
-      replyToId: m.replyToId ?? null,
-      pinned: m.pinned,
-    }));
+    const dekCache = new Map<number, Buffer>();
+
+    const items = await Promise.all(
+      rows.map(async (m) => {
+        let encryptedPayload: string | null = null;
+        if (m.ciphertextB64 && m.ivB64 && m.tagB64 && typeof m.keyVersion === 'number') {
+          let dek = dekCache.get(m.keyVersion);
+          if (!dek) {
+            const res = await this.chatKeyService.getDekByVersion(chatId, m.keyVersion);
+            dek = res.dek;
+            dekCache.set(m.keyVersion, dek);
+          }
+          const aad = this.buildMessageAad(chatId, m.id, m.senderId, m.keyVersion);
+          const plaintext = this.cryptoService.decryptBytes(
+            Buffer.from(m.ciphertextB64, 'base64'),
+            dek,
+            aad,
+            Buffer.from(m.ivB64, 'base64'),
+            Buffer.from(m.tagB64, 'base64'),
+          );
+          encryptedPayload = plaintext.toString('base64');
+        }
+
+        return {
+          id: m.id,
+          chatId,
+          senderId: m.senderId,
+          metadata: m.metadata,
+          createdAt: m.createdAt,
+          encryptedPayload,
+          replyToId: m.replyToId ?? null,
+          pinned: m.pinned,
+        };
+      }),
+    );
+
+    return items;
   }
   
   async joinChat(userId: string, chatId: string) {

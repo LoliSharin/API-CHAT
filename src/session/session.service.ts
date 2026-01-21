@@ -37,7 +37,6 @@ export class SessionService {
   async destroySession(sessionId: string) {
     await this.redis.del(`session:${sessionId}`);
   }
-
   
   async getUserBySession(sessionId: string): Promise<{ userId: string } | null> {
     const raw = await this.redis.get(`session:${sessionId}`);
