@@ -3,6 +3,7 @@ import { ChatKeyEntity } from "../entities/chat-key.entity";
 import { Repository } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
 import { KeyWrappingService } from "./key-wraped.service";
+import { KekService } from "./kek.service";
 import { randomBytes } from "crypto";
 
 @Injectable()
@@ -11,11 +12,9 @@ export class ChatKeyService {
   constructor(
     @InjectRepository(ChatKeyEntity) private readonly chatKeysRepo: Repository<ChatKeyEntity>,
     private readonly keyWrappingService: KeyWrappingService,
-  о) {
-    const raw = process.env.MASTER_KEK_B64;
-    if (!raw) throw new Error("MASTER_KEK_B64 не найдена");
-    this.kek = Buffer.from(raw, "base64");
-    if (this.kek.length !== 32) throw new Error("MASTER_KEK_B64 должна быть 32битном формате base64");
+    private readonly kekService: KekService,
+  ) {
+    this.kek = this.kekService.getKek();
   }
   private wrapAad(chatId: string, version: number): string {
     return `chat:${chatId}|keyVersion:${version}`;

@@ -9,6 +9,7 @@ import { Message } from './entities/message.entity';
 import { ChatFile } from './entities/chat-file.entity';
 import { MessageReaction } from './entities/message-reaction.entity';
 import { MessageReadStatus } from './entities/message-read-status.entity';
+import { ChatKeyEntity } from './entities/chat-key.entity';
 import { FilesModule } from './files/files.module';
 
 @Module({
@@ -16,7 +17,7 @@ import { FilesModule } from './files/files.module';
     TypeOrmModule.forRoot({
       type: 'postgres',
       url: process.env.DATABASE_URL || 'postgresql://chat_user:chat_pass@127.0.0.1:5432/chat_db?schema=public',
-      entities: [User, Chat, ChatParticipant, Message, ChatFile, MessageReaction, MessageReadStatus],
+      entities: [User, Chat, ChatParticipant, Message, ChatFile, MessageReaction, MessageReadStatus, ChatKeyEntity],
       synchronize: true, 
     }),
     AuthModule,

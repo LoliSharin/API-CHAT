@@ -10,6 +10,8 @@ import { Message } from '../entities/message.entity';
 import { MessageReaction } from '../entities/message-reaction.entity';
 import { FilesService } from '../files/files.service';
 import { NotificationService } from '../notifications/notification.service';
+import { ChatKeyService } from '../crypto/chat-key.service';
+import { CryptoService } from '../crypto/message-crypto.service';
 
 type RepoMock<T> = Partial<Record<keyof Repository<T>, jest.Mock>>;
 
@@ -38,6 +40,19 @@ const notificationServiceMock = (): jest.Mocked<NotificationService> =>
     notifyReaction: jest.fn(),
   }) as any;
 
+const chatKeyServiceMock = (): jest.Mocked<ChatKeyService> =>
+  ({
+    createInitialChatKey: jest.fn(),
+    getActiveDek: jest.fn(),
+    getDekByVersion: jest.fn(),
+  }) as any;
+
+const cryptoServiceMock = (): jest.Mocked<CryptoService> =>
+  ({
+    encryptBytes: jest.fn(),
+    decryptBytes: jest.fn(),
+  }) as any;
+
 describe('ChatService', () => {
   let service: ChatService;
   let chatRepo: RepoMock<Chat>;
@@ -47,6 +62,8 @@ describe('ChatService', () => {
   let reactionRepo: RepoMock<MessageReaction>;
   let filesService: jest.Mocked<FilesService>;
   let notificationService: jest.Mocked<NotificationService>;
+  let chatKeyService: jest.Mocked<ChatKeyService>;
+  let cryptoService: jest.Mocked<CryptoService>;
 
   beforeEach(async () => {
     chatRepo = repoMock();
@@ -56,6 +73,18 @@ describe('ChatService', () => {
     reactionRepo = repoMock();
     filesService = filesServiceMock();
     notificationService = notificationServiceMock();
+    chatKeyService = chatKeyServiceMock();
+    cryptoService = cryptoServiceMock();
+
+    (chatKeyService.getActiveDek as jest.Mock).mockResolvedValue({
+      dek: Buffer.alloc(32),
+      version: 1,
+    });
+    (cryptoService.encryptBytes as jest.Mock).mockReturnValue({
+      ciphertext: Buffer.from('x'),
+      iv: Buffer.alloc(12),
+      tag: Buffer.alloc(16),
+    });
 
     const module = await Test.createTestingModule({
       providers: [
@@ -67,6 +96,8 @@ describe('ChatService', () => {
         { provide: getRepositoryToken(MessageReaction), useValue: reactionRepo },
         { provide: FilesService, useValue: filesService },
         { provide: NotificationService, useValue: notificationService },
+        { provide: ChatKeyService, useValue: chatKeyService },
+        { provide: CryptoService, useValue: cryptoService },
       ],
     }).compile();
 
