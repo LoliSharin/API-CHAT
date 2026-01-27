@@ -9,3 +9,6 @@ docker-compose.yml
 **/.git
 TestChat1.ts
 TestChat2.ts 
+src/auth/auth.controller.spec.ts
+src/chats/chat.controller.spec.ts
+src/chats/chat.service.spec.ts

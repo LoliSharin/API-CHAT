@@ -57,6 +57,22 @@ export class ChatService {
   private buildMessageAad(chatId: string, messageId: string, senderId: string, version: number) {
     return `chat:${chatId}|msg:${messageId}|sender:${senderId}|v:${version}`;
   }
+
+  private validateLocation(metadata: any) {
+    const location = metadata?.location;
+    if (location == null) return;
+    if (typeof location !== 'object') {
+      throw new BadRequestException('Invalid location format');
+    }
+    const { lat, lon } = location as { lat?: unknown; lon?: unknown };
+    if (typeof lat !== 'number' || !Number.isFinite(lat) || lat < -90 || lat > 90) {
+      throw new BadRequestException('Invalid location.lat');
+    }
+    if (typeof lon !== 'number' || !Number.isFinite(lon) || lon < -180 || lon > 180) {
+      throw new BadRequestException('Invalid location.lon');
+    }
+  }
+
   async createChat(ownerId: string, dto: CreateChatDto) {
     if (dto.type === 'single') {
       const other = dto.participants?.[0];
@@ -81,15 +97,10 @@ export class ChatService {
       const chat = this.chatRepo.create({
         type: 'single',
         ownerId,
-        title: null,
-        description: null,
+        title: dto.title ?? null,
+        description: dto.description ?? null,
       });
       const savedChat = await this.chatRepo.save(chat);
-      
-      //здесь мы создаем dek ключ для чата b pfgbcsdftv d ,l
-      await this.chatKeyService.createInitialChatKey(chat.id);
-
-
       const uniqueParticipants = Array.from(new Set([ownerId, other]));
       const participantsEntities = uniqueParticipants.map((uid) =>
         this.partRepo.create({
@@ -138,6 +149,8 @@ export class ChatService {
     const isIn = await this.isUserInChat(senderId, chatId);
     if (!isIn) throw new ForbiddenException('User not in chat');
 
+    this.validateLocation(metadata);
+    
     const replyToId = metadata?.replyTo ?? null;
     if (replyToId) {
       const replyMsg = await this.msgRepo.findOne({ where: { id: replyToId }, relations: ['chat'] });
@@ -237,7 +250,6 @@ export class ChatService {
     const rows = await qb.getMany();
 
     const dekCache = new Map<number, Buffer>();
-
     const items = await Promise.all(
       rows.map(async (m) => {
         let encryptedPayload: string | null = null;
@@ -435,6 +447,36 @@ export class ChatService {
     chat.title = data.title ?? chat.title;
     chat.description = data.description ?? chat.description;
     return this.chatRepo.save(chat);
+  }
+
+
+  async deleteMessage(actorId: string, messageId: string) {
+    const msg = await this.msgRepo.findOne({ where: { id: messageId }, relations: ['chat'] });
+    if (!msg) throw new NotFoundException('Сообщение не найдено');
+
+    const chat = msg.chat;
+    if (chat.type === 'group') {
+      const actor = await this.getParticipant(chat.id, actorId);
+      if (!actor) throw new ForbiddenException('Не участник чата');
+
+      if (actor.role === 'owner') {
+      } else if (actor.role === 'admin') {
+        if (msg.senderId === chat.ownerId) {
+          throw new ForbiddenException('админ не может удалять сообщения владельца');
+        }
+      } else {
+        if (msg.senderId !== actorId) {
+          throw new ForbiddenException('не можете удалить чужое сообщение');
+        }
+      }
+    } else {
+      if (msg.senderId !== actorId) {
+        throw new ForbiddenException('не можете удалить чужое сообщение');
+      }
+    }
+
+    await this.msgRepo.remove(msg);
+    return { id: msg.id, chatId: chat.id, deleted: true };
   }
 
   async pinMessage(chatId: string, actorId: string, messageId: string, pin: boolean) {

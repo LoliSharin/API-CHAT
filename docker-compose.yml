@@ -32,15 +32,20 @@ services:
         condition: service_started
     environment:
       # БД и Redis
-      DATABASE_URL: ${DATABASE_URL:-postgresql://chat_user:chat_pass@postgres:5432/chat_db?schema=public}
+      # Use docker-specific URL to avoid .env DATABASE_URL pointing to 127.0.0.1
+      DATABASE_URL: ${DATABASE_URL_DOCKER:-postgresql://chat_user:chat_pass@postgres:5432/chat_db?schema=public}
       REDIS_HOST: ${REDIS_HOST:-redis}
       REDIS_PORT: ${REDIS_PORT:-6379}
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       # Приложение
       NODE_ENV: ${NODE_ENV:-production}
       PORT: ${PORT:-3000}
-      CHAT_PRIVATE_KEY: ${CHAT_PRIVATE_KEY}
-      CHAT_PUBLIC_KEY: ${CHAT_PUBLIC_KEY}
+      RSA_KEK_PRIVATE_KEY_PEM: ${RSA_KEK_PRIVATE_KEY_PEM}
+      RSA_KEK_PUBLIC_KEY_PEM: ${RSA_KEK_PUBLIC_KEY_PEM}
+      MASTER_KEK_WRAPPED_B64: ${MASTER_KEK_WRAPPED_B64}
+      CHAT_PUBLIC_KEY_PEM: ${CHAT_PUBLIC_KEY_PEM}
+      RSA_KEK_KEY_ID: ${RSA_KEK_KEY_ID}
+
     ports:
       - "3000:3000"
     volumes:

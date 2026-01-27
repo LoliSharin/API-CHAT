@@ -11,6 +11,8 @@ import { MessageReaction } from './entities/message-reaction.entity';
 import { MessageReadStatus } from './entities/message-read-status.entity';
 import { ChatKeyEntity } from './entities/chat-key.entity';
 import { FilesModule } from './files/files.module';
+import { ConfigModule } from '@nestjs/config';
+
 
 @Module({
   imports: [
@@ -23,7 +25,7 @@ import { FilesModule } from './files/files.module';
     AuthModule,
     ChatModule,
     FilesModule,
-    
+    ConfigModule.forRoot({ isGlobal: true }),
   ],
   
 })

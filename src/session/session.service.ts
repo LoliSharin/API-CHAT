@@ -52,10 +52,26 @@ export class SessionService {
   async getUserFromHandshake(handshake: any) {
     const cookieHeader = handshake.headers?.cookie;
     const authHeader = handshake.headers?.authorization;
+    const authPayload = handshake.auth;
+    const query = handshake.query;
 
     let sessionId: string | undefined;
 
-    if (cookieHeader) {
+    if (!sessionId && authPayload) {
+      const token = authPayload.sessionId || authPayload.token;
+      if (typeof token === 'string' && token) {
+        sessionId = token;
+      }
+    }
+
+    if (!sessionId && query) {
+      const token = query.sessionId || query.token;
+      if (typeof token === 'string' && token) {
+        sessionId = token;
+      }
+    }
+
+    if (!sessionId && cookieHeader) {
       const cookies = cookie.parse(cookieHeader);
       sessionId = cookies['sessionId'];
     }

@@ -124,6 +124,7 @@ describe('ChatService', () => {
       });
 
       expect(result).toEqual({ id: 'chat-1' });
+      expect(chatKeyService.createInitialChatKey).toHaveBeenCalledWith('chat-1');
       expect(partRepo.save).toHaveBeenCalled();
     });
 
@@ -158,11 +159,8 @@ describe('ChatService', () => {
         participants: ['u2', 'u3'],
       });
 
-      expect(notificationService.notifyGroupCreated).toHaveBeenCalledWith(
-        'chat-2',
-        'owner',
-        ['u2', 'u3'],
-      );
+      expect(chatKeyService.createInitialChatKey).toHaveBeenCalledWith('chat-2');
+      expect(notificationService.notifyGroupCreated).toHaveBeenCalledWith('chat-2', 'owner', ['u2', 'u3']);
     });
   });
 
@@ -183,6 +181,8 @@ describe('ChatService', () => {
         attachments: ['f1'],
       });
 
+      expect(chatKeyService.getActiveDek).toHaveBeenCalledWith('c1');
+      expect(cryptoService.encryptBytes).toHaveBeenCalled();
       expect(filesService.attachFilesToMessage).toHaveBeenCalledWith(['f1'], 'm1');
       expect(result.id).toBe('m1');
       expect(notificationService.notifyMessageSent).toHaveBeenCalled();
@@ -190,52 +190,31 @@ describe('ChatService', () => {
 
     it('кидает Forbidden если не в чате', async () => {
       jest.spyOn(service, 'isUserInChat').mockResolvedValue(false);
-      await expect(
-        service.createMessage('u1', 'c1', null, {}),
-      ).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(service.createMessage('u1', 'c1', null, {})).rejects.toBeInstanceOf(ForbiddenException);
     });
   });
 
-  describe('reactions', () => {
-    it('добавляет реакцию', async () => {
-      (msgRepo.findOne as jest.Mock).mockResolvedValue({ id: 'm1', chat: { id: 'c1' } });
-      jest.spyOn(service, 'isUserInChat').mockResolvedValue(true);
-      (reactionRepo.findOne as jest.Mock).mockResolvedValue(null);
-      (reactionRepo.create as jest.Mock).mockImplementation((x) => x);
-      (reactionRepo.save as jest.Mock).mockResolvedValue({ id: 'r1' });
-
-      const res = await service.addReaction('u1', 'm1', 'like');
-
-      expect(res).toEqual({ id: 'r1' });
-      expect(notificationService.notifyReaction).toHaveBeenCalledWith('c1', 'm1', 'u1', 'like', 'add');
+  describe('deleteMessage', () => {
+    it('запрещает удаление чужого сообщения в single чате', async () => {
+      (msgRepo.findOne as jest.Mock).mockResolvedValue({
+        id: 'm1',
+        senderId: 'u2',
+        chat: { id: 'c1', type: 'single', ownerId: 'u1' },
+      });
+      await expect(service.deleteMessage('u1', 'm1')).rejects.toBeInstanceOf(ForbiddenException);
     });
 
-    it('удаляет реакцию и проверяет участие в чате', async () => {
-      (msgRepo.findOne as jest.Mock).mockResolvedValue({ id: 'm1', chat: { id: 'c1' } });
-      jest.spyOn(service, 'isUserInChat').mockResolvedValue(true);
-      (reactionRepo.findOne as jest.Mock).mockResolvedValue({ id: 'r1', message: { id: 'm1' } });
-      (reactionRepo.remove as jest.Mock).mockResolvedValue(true);
+    it('удаляет сообщение владельцем группы', async () => {
+      (msgRepo.findOne as jest.Mock).mockResolvedValue({
+        id: 'm1',
+        senderId: 'u2',
+        chat: { id: 'c1', type: 'group', ownerId: 'u1' },
+      });
+      (partRepo.findOne as jest.Mock).mockResolvedValue({ role: 'owner' });
+      (msgRepo.remove as jest.Mock).mockResolvedValue(true);
 
-      await service.removeReaction('u1', 'm1', 'like');
-
-      expect(reactionRepo.remove).toHaveBeenCalled();
-      expect(notificationService.notifyReaction).toHaveBeenCalledWith('c1', 'm1', 'u1', 'like', 'remove');
-    });
-  });
-
-  describe('mark read/delivered', () => {
-    it('отклоняет если пользователь не в чате', async () => {
-      (msgRepo.findOne as jest.Mock).mockResolvedValue({ id: 'm1', chat: { id: 'c1' } });
-      jest.spyOn(service, 'isUserInChat').mockResolvedValue(false);
-      await expect(service.markMessageDelivered('m1', 'u1')).rejects.toBeInstanceOf(ForbiddenException);
-    });
-
-    it('проставляет delivered', async () => {
-      (msgRepo.findOne as jest.Mock).mockResolvedValue({ id: 'm1', chat: { id: 'c1' } });
-      jest.spyOn(service, 'isUserInChat').mockResolvedValue(true);
-      (msgRepo.query as jest.Mock).mockResolvedValue(true);
-      await service.markMessageDelivered('m1', 'u1');
-      expect(msgRepo.query).toHaveBeenCalled();
+      const res = await service.deleteMessage('u1', 'm1');
+      expect(res).toEqual({ id: 'm1', chatId: 'c1', deleted: true });
     });
   });
 

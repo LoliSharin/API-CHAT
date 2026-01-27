@@ -35,18 +35,18 @@ export class AuthController {
       path: '/'
     });
 
-    return res.json({ ok: true, user: { id: user.id, username: user.username, displayName: user.displayName }});
+    return { ok: true, user: { id: user.id, username: user.username, displayName: user.displayName }};
   }
 
   @Post('logout')
-  async logout(@Req() req: Request, @Res() res: Response) {
+  async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const cookies = require('cookie').parse(req.headers.cookie || '');
     const sessionId = cookies['sessionId'];
     if (sessionId) {
       await this.sessionService.destroySession(sessionId);
       res.clearCookie('sessionId', { path: '/' });
     }
-    return res.json({ ok: true });
+    return { ok: true };
   }
   @Post('register')
   async register(

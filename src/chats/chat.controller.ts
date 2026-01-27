@@ -11,9 +11,12 @@ import {
   UsePipes,
   ValidationPipe,
   ForbiddenException,
+  NotFoundException,
 } from '@nestjs/common';
 import { ChatService } from './chat.service';
 import { Request } from 'express';
+import { Type } from 'class-transformer';
+import { IsNumber, IsObject, IsOptional, IsString, Max, Min, ValidateNested } from 'class-validator';
 
 class CreateChatDto {
   type: 'single' | 'group';
@@ -23,6 +26,12 @@ class CreateChatDto {
 }
 class AddParticipantDto {
   userId: string;
+}
+class LocationDto {
+  @IsNumber({ allowNaN: false, allowInfinity: false })
+  @Min(-90)
+  @Max(90)
+  lat: number;
 }
 class SendMessageDto {
   encryptedPayload?: string;
@@ -86,6 +95,7 @@ export class ChatController {
   }
 
   @Post(':chatId/messages')
+  @UsePipes(new ValidationPipe({ transform: true }))
   async sendMessage(
     @Param('chatId') chatId: string,
     @Body() body: SendMessageDto,
@@ -177,6 +187,21 @@ export class ChatController {
     const actor = req.user;
     if (!actor) throw new ForbiddenException('Unauthorized');
     return this.chatService.pinMessage(body.chatId, actor.id, messageId, false);
+  }
+
+  @Delete('messages/:messageId')
+  async deleteMessage(@Param('messageId') messageId: string, @Req() req: Request) {
+    const actor = req.user;
+    if (!actor) throw new ForbiddenException('Unauthorized');
+    return this.chatService.deleteMessage(actor.id, messageId);
+  }
+
+  @Get('public-key')
+  async getPublicKey() {
+    const raw = process.env.CHAT_PUBLIC_KEY_PEM;
+    if (!raw) throw new NotFoundException('Public key not configured');
+    const normalized = raw.includes('\\n') ? raw.replace(/\\n/g, '\n') : raw;
+    return { publicKey: normalized };
   }
 
   @Get('search')

@@ -25,6 +25,7 @@ describe('ChatController', () => {
       addReaction: jest.fn(),
       removeReaction: jest.fn(),
       pinMessage: jest.fn(),
+      deleteMessage: jest.fn(),
       search: jest.fn(),
     }) as any;
 
@@ -36,9 +37,7 @@ describe('ChatController', () => {
   beforeEach(async () => {
     const module = await Test.createTestingModule({
       controllers: [ChatController],
-      providers: [
-        { provide: ChatService, useValue: serviceMock() },
-      ],
+      providers: [{ provide: ChatService, useValue: serviceMock() }],
     }).compile();
 
     controller = module.get(ChatController);
@@ -47,17 +46,14 @@ describe('ChatController', () => {
 
   it('создает чат', async () => {
     (service.createChat as jest.Mock).mockResolvedValue({ id: 'c1' });
-    const res = await controller.createChat(
-      { type: 'group', participants: [] },
-      makeReq('u1'),
-    );
+    const res = await controller.createChat({ type: 'group', participants: [] }, makeReq('u1'));
     expect(res).toEqual({ id: 'c1' });
   });
 
   it('кидает Forbidden если нет пользователя', async () => {
-    await expect(
-      controller.createChat({ type: 'group', participants: [] }, makeReq()),
-    ).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(controller.createChat({ type: 'group', participants: [] }, makeReq())).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
   });
 
   it('отправляет сообщение', async () => {
@@ -70,7 +66,6 @@ describe('ChatController', () => {
     expect(service.createMessage).toHaveBeenCalledWith('u1', 'c1', expect.any(Buffer), {});
     expect(res).toEqual({ id: 'm1' });
   });
-
 
   it('поиск требует авторизации', async () => {
     await expect(controller.search('hi', makeReq())).rejects.toBeInstanceOf(ForbiddenException);

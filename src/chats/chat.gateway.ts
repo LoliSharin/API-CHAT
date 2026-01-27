@@ -30,23 +30,30 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly sessionService: SessionService,
     private readonly filesService: FilesService,
   ) {}
+  private async resolveUserId(client: Socket): Promise<string | null> {
+    if (client.data.userId) return client.data.userId;
+    const user = await this.sessionService.getUserFromHandshake(client.handshake);
+    if (!user?.userId) return null;
+    client.data.userId = user.userId;
+    return user.userId;
+  }
   async handleConnection(client: Socket) {
     try {
-      const user = await this.sessionService.getUserFromHandshake(client.handshake);
-      if (!user) {
+      const userId = await this.resolveUserId(client);
+      if (!userId) {
         this.logger.warn(`Unauthorized socket attempted to connect: ${client.id}`);
         client.emit('error', { message: 'Unauthorized' });
         return client.disconnect(true);
       }
 
   
-  client.data.userId = user.userId;
+  client.data.userId = userId;
   client.data.username = null;
 
-  this.sessionService.addUserSocket(user.userId, client.id);
-  this.server.emit('presence.update', { userId: user.userId, status: 'online' });
+  this.sessionService.addUserSocket(userId, client.id);
+  this.server.emit('presence.update', { userId, status: 'online' });
 
-  this.logger.log(`Socket connected: ${client.id} user:${user.userId}`);
+  this.logger.log(`Socket connected: ${client.id} user:${userId}`);
     } catch (err) {
       this.logger.error('Connection handling error', err as any);
       return client.disconnect(true);
@@ -65,7 +72,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   //подключение к чату
   @SubscribeMessage('join_chat')
   async onJoinChat(@ConnectedSocket() client: Socket, @MessageBody() payload: { chatId: string }) {
-    const userId = client.data.userId;
+    const userId = await this.resolveUserId(client);
     if (!userId) throw new ForbiddenException();
 
     const allowed = await this.chatService.isUserInChat(userId, payload.chatId);
@@ -82,7 +89,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   // выход из чата
   @SubscribeMessage('leave_chat')
   async onLeaveChat(@ConnectedSocket() client: Socket, @MessageBody() payload: { chatId: string }) {
-    const userId = client.data.userId;
+    const userId = await this.resolveUserId(client);
     if (!userId) throw new ForbiddenException();
     await this.chatService.leaveChat(userId, payload.chatId);
     client.leave(`chat:${payload.chatId}`);
@@ -94,7 +101,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   // отправка сообщения
   @SubscribeMessage('send_message')
   async onSendMessage(@ConnectedSocket() client: Socket, @MessageBody() payload: { chatId: string; encryptedPayload?: string; metadata?: any }) {
-    const userId = client.data.userId;
+    const userId = await this.resolveUserId(client);
     if (!userId) {
       client.emit('error', { message: 'Unauthorized' });
       return;
@@ -141,7 +148,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   // доставка сообщения
   @SubscribeMessage('message_delivered')
   async onMessageDelivered(@ConnectedSocket() client: Socket, @MessageBody() payload: { chatId: string; messageId: string }) {
-    const userId = client.data.userId;
+    const userId = await this.resolveUserId(client);
     if (!userId) return;
 
     await this.chatService.markMessageDelivered(payload.messageId, userId);
@@ -157,7 +164,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   // чтение сообщения
   @SubscribeMessage('message_read')
   async onMessageRead(@ConnectedSocket() client: Socket, @MessageBody() payload: { chatId: string; messageId: string }) {
-    const userId = client.data.userId;
+    const userId = await this.resolveUserId(client);
     if (!userId) return;
 
     await this.chatService.markMessageRead(payload.messageId, userId);
@@ -174,7 +181,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: { chatId: string; limit?: number; before?: string },
   ) {
-    const userId = client.data.userId;
+    const userId = await this.resolveUserId(client);
     if (!userId) return;
     if (!payload?.chatId) {
       client.emit('error', { message: 'chatId required' });
@@ -186,6 +193,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       before: payload.before,
     });
 
+
     client.emit('messages.list', { chatId: payload.chatId, items: messages });
   }
 
@@ -193,7 +201,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   // начало/остановка набора текста
   @SubscribeMessage('typing.start')
   async onTypingStart(@ConnectedSocket() client: Socket, @MessageBody() payload: { chatId: string }) {
-    const userId = client.data.userId;
+    const userId = await this.resolveUserId(client);
     if (!userId) return;
     const allowed = await this.chatService.isUserInChat(userId, payload.chatId);
     if (!allowed) return;
@@ -206,7 +214,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
   @SubscribeMessage('typing.stop')
   async onTypingStop(@ConnectedSocket() client: Socket, @MessageBody() payload: { chatId: string }) {
-    const userId = client.data.userId;
+    const userId = await this.resolveUserId(client);
     if (!userId) return;
     const allowed = await this.chatService.isUserInChat(userId, payload.chatId);
     if (!allowed) return;
@@ -223,7 +231,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: { messageId: string; type: string; chatId: string },
   ) {
-    const userId = client.data.userId;
+    const userId = await this.resolveUserId(client);
     if (!userId) return;
     await this.chatService.addReaction(userId, payload.messageId, payload.type);
     this.server.to(`chat:${payload.chatId}`).emit('reaction.updated', {
@@ -239,7 +247,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: { messageId: string; type: string; chatId: string },
   ) {
-    const userId = client.data.userId;
+    const userId = await this.resolveUserId(client);
     if (!userId) return;
     await this.chatService.removeReaction(userId, payload.messageId, payload.type);
     this.server.to(`chat:${payload.chatId}`).emit('reaction.updated', {
@@ -255,7 +263,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: { chatId: string; messageId: string; pin: boolean },
   ) {
-    const userId = client.data.userId;
+    const userId = await this.resolveUserId(client);
     if (!userId) return;
     const result = await this.chatService.pinMessage(payload.chatId, userId, payload.messageId, payload.pin);
     this.server.to(`chat:${payload.chatId}`).emit('message.pinned', {
@@ -263,5 +271,25 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       pinned: result.pinned,
       actorId: userId,
     });
+  }
+
+  @SubscribeMessage('message.delete')
+  async onMessageDelete(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: { messageId: string },
+  ) {
+    const userId = await this.resolveUserId(client);
+    if (!userId) return;
+    if (!payload?.messageId) {
+      client.emit('error', { message: 'messageId required' });
+      return;
+    }
+
+    const result = await this.chatService.deleteMessage(userId, payload.messageId);
+    this.server.to(`chat:${result.chatId}`).emit('message.deleted', {
+      messageId: result.id,
+      actorId: userId,
+    });
+    client.emit('message.deleted', { messageId: result.id, chatId: result.chatId, actorId: userId });
   }
 }
