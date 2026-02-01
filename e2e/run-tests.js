@@ -107,6 +107,12 @@ async function runRestFlow() {
   );
   if (!group.res.ok) throw new Error(`createGroupChat failed: ${group.res.status}`);
 
+  console.log('REST: get chat key');
+  const keyRes = await getJson(`/api/chats/${group.json.id}/key`, jar1);
+  if (!keyRes.res.ok) throw new Error(`getChatKey failed: ${keyRes.res.status}`);
+  const dek = unwrapDek(keyRes.json.wrappedDekForClientB64, privateKey);
+  if (dek.length !== 32) throw new Error('Invalid DEK length');
+
   console.log('REST: upload file');
   const file = await uploadFile(group.json.id, jar1);
 
