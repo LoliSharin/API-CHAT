@@ -16,9 +16,6 @@ export class ChatKeyService {
   ) {
     this.kek = this.kekService.getKek();
   }
-  private wrapAad(chatId: string, version: number): string {
-    return `chat:${chatId}|keyVersion:${version}`;
-  }
   async createInitialChatKey(chatId: string){
     // в случае если ключь есть в бд 
     const existing = await this.chatKeysRepo.findOne({ where: { chatId } });
@@ -29,7 +26,6 @@ export class ChatKeyService {
     const wrappedKey = this.keyWrappingService.wrapKey(
       dek,
       this.kek,
-      this.wrapAad(chatId, 1),
     );
 
     // сохраняем ключ dek в БД
@@ -56,7 +52,6 @@ export class ChatKeyService {
         wrap_tag_b64: row.wrapTagB64,
       },
       this.kek,
-      `chat:${chatId}|keyVersion:${row.version}`,
     );
     return { dek, version: row.version };
   }
@@ -75,7 +70,6 @@ export class ChatKeyService {
         wrap_tag_b64: row.wrapTagB64,
       },
         this.kek,
-        this.wrapAad(chatId, row.version),
       );
     return { dek, version: row.version };
   }

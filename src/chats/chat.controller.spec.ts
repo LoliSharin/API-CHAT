@@ -26,6 +26,7 @@ describe('ChatController', () => {
       removeReaction: jest.fn(),
       pinMessage: jest.fn(),
       deleteMessage: jest.fn(),
+      getChatKeyForUser: jest.fn(),
       search: jest.fn(),
     }) as any;
 
@@ -60,10 +61,26 @@ describe('ChatController', () => {
     (service.createMessage as jest.Mock).mockResolvedValue({ id: 'm1' });
     const res = await controller.sendMessage(
       'c1',
-      { encryptedPayload: Buffer.from('a').toString('base64'), metadata: {} },
+      {
+        ciphertextB64: Buffer.from('x').toString('base64'),
+        ivB64: Buffer.alloc(12).toString('base64'),
+        tagB64: Buffer.alloc(16).toString('base64'),
+        keyVersion: 1,
+        metadata: {},
+      },
       makeReq('u1'),
     );
-    expect(service.createMessage).toHaveBeenCalledWith('u1', 'c1', expect.any(Buffer), {});
+    expect(service.createMessage).toHaveBeenCalledWith(
+      'u1',
+      'c1',
+      {
+        ciphertextB64: expect.any(String),
+        ivB64: expect.any(String),
+        tagB64: expect.any(String),
+        keyVersion: 1,
+      },
+      {},
+    );
     expect(res).toEqual({ id: 'm1' });
   });
 

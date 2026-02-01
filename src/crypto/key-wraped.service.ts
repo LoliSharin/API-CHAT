@@ -9,13 +9,12 @@ export type WrappedKeyPayload = {
 
 @Injectable()
 export class KeyWrappingService {
-  wrapKey(dek: Buffer, kek: Buffer, aad: string): WrappedKeyPayload {
+  wrapKey(dek: Buffer, kek: Buffer): WrappedKeyPayload {
     if (kek.length !== 32) throw new Error("KEK must be 32 bytes (AES-256)");
     if (dek.length !== 32) throw new Error("DEK must be 32 bytes (AES-256)");
 
     const iv = randomBytes(12);
     const cipher = createCipheriv("aes-256-gcm", kek, iv);
-    cipher.setAAD(Buffer.from(aad, "utf8"));
 
     const wrapped = Buffer.concat([cipher.update(dek), cipher.final()]);
     const tag = cipher.getAuthTag();
@@ -27,7 +26,7 @@ export class KeyWrappingService {
     };
   }
 
-  unwrapKey(payload: WrappedKeyPayload, kek: Buffer, aad: string): Buffer {
+  unwrapKey(payload: WrappedKeyPayload, kek: Buffer): Buffer {
     if (kek.length !== 32) throw new Error("KEK must be 32 bytes (AES-256)");
 
     const iv = Buffer.from(payload.wrap_iv_b64, "base64");
@@ -35,7 +34,6 @@ export class KeyWrappingService {
     const wrapped = Buffer.from(payload.wrapped_key_b64, "base64");
 
     const decipher = createDecipheriv("aes-256-gcm", kek, iv);
-    decipher.setAAD(Buffer.from(aad, "utf8"));
     decipher.setAuthTag(tag);
 
     return Buffer.concat([decipher.update(wrapped), decipher.final()]);

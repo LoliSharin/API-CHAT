@@ -1,7 +1,8 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException, BadRequestException } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Test } from '@nestjs/testing';
 import { Repository } from 'typeorm';
+import { constants, generateKeyPairSync, privateDecrypt } from 'crypto';
 import { ChatService } from './chat.service';
 import { Chat } from '../entities/chat.entity';
 import { ChatParticipant } from '../entities/chat-participant.entity';
@@ -11,7 +12,7 @@ import { MessageReaction } from '../entities/message-reaction.entity';
 import { FilesService } from '../files/files.service';
 import { NotificationService } from '../notifications/notification.service';
 import { ChatKeyService } from '../crypto/chat-key.service';
-import { CryptoService } from '../crypto/message-crypto.service';
+import { UserPublicKeyEntity } from '../entities/userPublicKey.entity';
 
 type RepoMock<T> = Partial<Record<keyof Repository<T>, jest.Mock>>;
 
@@ -47,11 +48,6 @@ const chatKeyServiceMock = (): jest.Mocked<ChatKeyService> =>
     getDekByVersion: jest.fn(),
   }) as any;
 
-const cryptoServiceMock = (): jest.Mocked<CryptoService> =>
-  ({
-    encryptBytes: jest.fn(),
-    decryptBytes: jest.fn(),
-  }) as any;
 
 describe('ChatService', () => {
   let service: ChatService;
@@ -60,10 +56,10 @@ describe('ChatService', () => {
   let msgRepo: RepoMock<Message>;
   let fileRepo: RepoMock<ChatFile>;
   let reactionRepo: RepoMock<MessageReaction>;
+  let userPublicKeyRepo: RepoMock<any>;
   let filesService: jest.Mocked<FilesService>;
   let notificationService: jest.Mocked<NotificationService>;
   let chatKeyService: jest.Mocked<ChatKeyService>;
-  let cryptoService: jest.Mocked<CryptoService>;
 
   beforeEach(async () => {
     chatRepo = repoMock();
@@ -71,19 +67,14 @@ describe('ChatService', () => {
     msgRepo = repoMock();
     fileRepo = repoMock();
     reactionRepo = repoMock();
+    userPublicKeyRepo = repoMock();
     filesService = filesServiceMock();
     notificationService = notificationServiceMock();
     chatKeyService = chatKeyServiceMock();
-    cryptoService = cryptoServiceMock();
 
     (chatKeyService.getActiveDek as jest.Mock).mockResolvedValue({
       dek: Buffer.alloc(32),
       version: 1,
-    });
-    (cryptoService.encryptBytes as jest.Mock).mockReturnValue({
-      ciphertext: Buffer.from('x'),
-      iv: Buffer.alloc(12),
-      tag: Buffer.alloc(16),
     });
 
     const module = await Test.createTestingModule({
@@ -94,10 +85,10 @@ describe('ChatService', () => {
         { provide: getRepositoryToken(Message), useValue: msgRepo },
         { provide: getRepositoryToken(ChatFile), useValue: fileRepo },
         { provide: getRepositoryToken(MessageReaction), useValue: reactionRepo },
+        { provide: getRepositoryToken(UserPublicKeyEntity), useValue: userPublicKeyRepo },
         { provide: FilesService, useValue: filesService },
         { provide: NotificationService, useValue: notificationService },
         { provide: ChatKeyService, useValue: chatKeyService },
-        { provide: CryptoService, useValue: cryptoService },
       ],
     }).compile();
 
@@ -177,12 +168,15 @@ describe('ChatService', () => {
         createdAt: new Date(),
       });
 
-      const result = await service.createMessage('u1', 'c1', Buffer.from('a'), {
+      const result = await service.createMessage('u1', 'c1', {
+        ciphertextB64: Buffer.from('x').toString('base64'),
+        ivB64: Buffer.alloc(12).toString('base64'),
+        tagB64: Buffer.alloc(16).toString('base64'),
+        keyVersion: 1,
+      }, {
         attachments: ['f1'],
       });
 
-      expect(chatKeyService.getActiveDek).toHaveBeenCalledWith('c1');
-      expect(cryptoService.encryptBytes).toHaveBeenCalled();
       expect(filesService.attachFilesToMessage).toHaveBeenCalledWith(['f1'], 'm1');
       expect(result.id).toBe('m1');
       expect(notificationService.notifyMessageSent).toHaveBeenCalled();
@@ -191,6 +185,55 @@ describe('ChatService', () => {
     it('кидает Forbidden если не в чате', async () => {
       jest.spyOn(service, 'isUserInChat').mockResolvedValue(false);
       await expect(service.createMessage('u1', 'c1', null, {})).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('выдает BadRequest, когда поля ciphertext не заполнены', async () => {
+      jest.spyOn(service, 'isUserInChat').mockResolvedValue(true);
+      await expect(
+        service.createMessage('u1', 'c1', { ciphertextB64: 'x', ivB64: 'y' }, {}),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+
+  describe('getChatKeyForUser', () => {
+    it('обертывает chat-key c помощью public key', async () => {
+      jest.spyOn(service, 'isUserInChat').mockResolvedValue(true);
+      const { publicKey, privateKey } = generateKeyPairSync('rsa', {
+        modulusLength: 2048,
+        publicKeyEncoding: { type: 'spki', format: 'pem' },
+        privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+      });
+
+      (userPublicKeyRepo.findOne as jest.Mock).mockResolvedValue({
+        userId: 'u1',
+        publicKeyPem: publicKey,
+        isActive: true,
+        keyId: null,
+        createdAt: new Date(),
+      });
+
+      const dek = Buffer.alloc(32, 7);
+      (chatKeyService.getActiveDek as jest.Mock).mockResolvedValue({ dek, version: 1 });
+
+      const res = await service.getChatKeyForUser('u1', 'c1');
+      const wrapped = Buffer.from(res.wrappedDekForClientB64, 'base64');
+      const unwrapped = privateDecrypt(
+        {
+          key: privateKey,
+          padding: constants.RSA_PKCS1_OAEP_PADDING,
+          oaepHash: 'sha256',
+        },
+        wrapped,
+      );
+
+      expect(unwrapped.equals(dek)).toBe(true);
+      expect(res.version).toBe(1);
+    });
+
+    it('кидает NotFound если public key пользователя отсутствует', async () => {
+      jest.spyOn(service, 'isUserInChat').mockResolvedValue(true);
+      (userPublicKeyRepo.findOne as jest.Mock).mockResolvedValue(null);
+      await expect(service.getChatKeyForUser('u1', 'c1')).rejects.toBeInstanceOf(NotFoundException);
     });
   });
 

@@ -34,7 +34,10 @@ class LocationDto {
   lat: number;
 }
 class SendMessageDto {
-  encryptedPayload?: string;
+  ciphertextB64?: string;
+  ivB64?: string;
+  tagB64?: string;
+  keyVersion?: number;
   metadata?: any;
 }
 class ReactionDto {
@@ -103,8 +106,15 @@ export class ChatController {
   ) {
     const user = (req as any).user;
     if (!user) throw new ForbiddenException('Unauthorized');
-    const buffer = body.encryptedPayload ? Buffer.from(body.encryptedPayload, 'base64') : null;
-    return this.chatService.createMessage(user.id, chatId, buffer, body.metadata);
+    const payload = body.ciphertextB64
+      ? {
+          ciphertextB64: body.ciphertextB64,
+          ivB64: body.ivB64,
+          tagB64: body.tagB64,
+          keyVersion: body.keyVersion,
+        }
+      : null;
+    return this.chatService.createMessage(user.id, chatId, payload, body.metadata);
   }
 
   @Post('messages/:messageId/delivered')
@@ -202,6 +212,13 @@ export class ChatController {
     if (!raw) throw new NotFoundException('Public key not configured');
     const normalized = raw.includes('\\n') ? raw.replace(/\\n/g, '\n') : raw;
     return { publicKey: normalized };
+  }
+
+  @Get(':chatId/key')
+  async getChatKey(@Param('chatId') chatId: string, @Req() req: Request) {
+    const actor = req.user;
+    if (!actor) throw new ForbiddenException('Неавторизован');
+    return this.chatService.getChatKeyForUser(actor.id, chatId);
   }
 
   @Get('search')

@@ -1,5 +1,13 @@
 /* eslint-disable no-console */
 const { setTimeout: delay } = require('timers/promises');
+const {
+  constants,
+  createCipheriv,
+  createDecipheriv,
+  generateKeyPairSync,
+  privateDecrypt,
+  randomBytes,
+} = require('crypto');
 
 const baseUrl = process.env.API_BASE_URL || 'http://localhost:3000';
 
@@ -85,6 +93,38 @@ async function uploadFile(chatId, jar) {
   return res.json;
 }
 
+function encryptAesGcm(plaintext, key) {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return {
+    ciphertextB64: ciphertext.toString('base64'),
+    ivB64: iv.toString('base64'),
+    tagB64: tag.toString('base64'),
+  };
+}
+
+function decryptAesGcm(ciphertextB64, ivB64, tagB64, key) {
+  const iv = Buffer.from(ivB64, 'base64');
+  const ciphertext = Buffer.from(ciphertextB64, 'base64');
+  const tag = Buffer.from(tagB64, 'base64');
+  const decipher = createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+}
+
+function unwrapDek(wrappedB64, privateKeyPem) {
+  return privateDecrypt(
+    {
+      key: privateKeyPem,
+      padding: constants.RSA_PKCS1_OAEP_PADDING,
+      oaepHash: 'sha256',
+    },
+    Buffer.from(wrappedB64, 'base64'),
+  );
+}
+
 async function runRestFlow() {
   console.log('REST: register/login');
   const u1 = await registerOrLogin('e2e_user_1', 'pass123', 'User One');
@@ -94,6 +134,15 @@ async function runRestFlow() {
   const jar1 = u1.jar;
   const jar2 = u2.jar;
   const jar3 = u3.jar;
+
+  console.log('REST: register public key');
+  const { publicKey, privateKey } = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+  });
+  const pubRes = await postJson('/api/keys/public', { publicKey }, jar1);
+  if (!pubRes.res.ok) throw new Error(`postPublicKey failed: ${pubRes.res.status}`);
 
   console.log('REST: create single chat');
   const single = await postJson('/api/chats', { type: 'single', participants: [u2.data.user.id] }, jar1);
@@ -117,10 +166,10 @@ async function runRestFlow() {
   const file = await uploadFile(group.json.id, jar1);
 
   console.log('REST: send message');
-  const payload = Buffer.from('hello').toString('base64');
+  const enc = encryptAesGcm(Buffer.from('hello'), dek);
   const msgRes = await postJson(
     `/api/chats/${group.json.id}/messages`,
-    { encryptedPayload: payload, metadata: { attachments: [file.id] } },
+    { ...enc, keyVersion: keyRes.json.version, metadata: { attachments: [file.id] } },
     jar1,
   );
   if (!msgRes.res.ok) throw new Error(`sendMessage failed: ${msgRes.res.status}`);
@@ -158,7 +207,7 @@ async function runRestFlow() {
   console.log('REST: delete message');
   await delJson(`/api/chats/messages/${msgId}`, jar1);
 
-  return { groupId: group.json.id, jar1, jar2 };
+  return { groupId: group.json.id, jar1, jar2, dek, keyVersion: keyRes.json.version };
 }
 
 async function waitForEvent(socket, event, timeoutMs = 5000) {
@@ -210,8 +259,13 @@ async function runWsFlow(ctx) {
   socket.emit('join_chat', { chatId: ctx.groupId });
   await waitForEvent(socket, 'joined_chat');
 
-  const payload = Buffer.from('ws-hello').toString('base64');
-  socket.emit('send_message', { chatId: ctx.groupId, encryptedPayload: payload, metadata: {} });
+  const enc = encryptAesGcm(Buffer.from('ws-hello'), ctx.dek);
+  socket.emit('send_message', {
+    chatId: ctx.groupId,
+    ...enc,
+    keyVersion: ctx.keyVersion,
+    metadata: {},
+  });
   const sent = await waitForEvent(socket, 'message.sent');
 
   console.log('WS: messages.list (decrypt check)');
@@ -222,8 +276,9 @@ async function runWsFlow(ctx) {
   if (!msg) {
     throw new Error('messages.list did not include sent message');
   }
-  if (msg.encryptedPayload !== payload) {
-    throw new Error('encryptedPayload mismatch (decrypt check failed)');
+  const plaintext = decryptAesGcm(msg.ciphertextB64, msg.ivB64, msg.tagB64, ctx.dek);
+  if (plaintext.toString() !== 'ws-hello') {
+    throw new Error('decrypt check failed');
   }
   console.log('WS: decrypt check OK');
 

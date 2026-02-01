@@ -9,8 +9,8 @@ import { MessageReaction } from '../entities/message-reaction.entity';
 import { FilesService } from '../files/files.service';
 import { NotificationService } from '../notifications/notification.service';
 import { ChatKeyService } from '../crypto/chat-key.service';
-import { CryptoService } from '../crypto/message-crypto.service'; 
-import { randomUUID } from "crypto"; 
+import { UserPublicKeyEntity } from '../entities/userPublicKey.entity';
+import { constants, publicEncrypt, randomUUID } from "crypto"; 
 
 type CreateChatDto = {
   type: 'single' | 'group';
@@ -27,10 +27,10 @@ export class ChatService {
     @InjectRepository(Message) private readonly msgRepo: Repository<Message>,
     @InjectRepository(ChatFile) private readonly fileRepo: Repository<ChatFile>,
     @InjectRepository(MessageReaction) private readonly reactionRepo: Repository<MessageReaction>,
+    @InjectRepository(UserPublicKeyEntity) private readonly userPublicKeyRepo: Repository<UserPublicKeyEntity>,
     private readonly filesService: FilesService,
     private readonly notificationService: NotificationService,
     private readonly chatKeyService: ChatKeyService,
-    private readonly cryptoService: CryptoService,
   ){}
 
   async isUserInChat(userId: string, chatId: string) {
@@ -52,10 +52,6 @@ export class ChatService {
     if (!actor || (actor.role !== 'owner' && actor.role !== 'admin')) {
       throw new ForbiddenException('No rights to manage participants');
     }
-  }
-
-  private buildMessageAad(chatId: string, messageId: string, senderId: string, version: number) {
-    return `chat:${chatId}|msg:${messageId}|sender:${senderId}|v:${version}`;
   }
 
   private validateLocation(metadata: any) {
@@ -110,6 +106,7 @@ export class ChatService {
         }),
       );
       await this.partRepo.save(participantsEntities);
+      await this.chatKeyService.createInitialChatKey(savedChat.id);
       return savedChat;
     }
 
@@ -130,6 +127,7 @@ export class ChatService {
       }),
     );
     await this.partRepo.save(participantsEntities);
+    await this.chatKeyService.createInitialChatKey(savedChat.id);
     await this.notificationService.notifyGroupCreated(
       savedChat.id,
       ownerId,
@@ -142,7 +140,7 @@ export class ChatService {
   async createMessage(
     senderId: string,
     chatId: string,
-    encryptedPayloadBuffer: Buffer | null,
+    encryptedPayload: { ciphertextB64?: string; ivB64?: string; tagB64?: string; keyVersion?: number } | null,
     metadata: any,
   ) {
     //проверки
@@ -175,18 +173,19 @@ export class ChatService {
 
     // шифрование 
     const messageId = randomUUID();
-    const { dek, version } = await this.chatKeyService.getActiveDek(chatId);
-    const aad = this.buildMessageAad(chatId, messageId, senderId, version);
     let ciphertextB64: string | null = null;
     let ivB64: string | null = null;
     let tagB64: string | null = null;
-    let keyVersion: number | null = null
-    if (encryptedPayloadBuffer && encryptedPayloadBuffer.length > 0) {
-      const enc = this.cryptoService.encryptBytes(encryptedPayloadBuffer, dek, aad);
-      ciphertextB64 = enc.ciphertext.toString("base64");
-      ivB64 = enc.iv.toString("base64");
-      tagB64 = enc.tag.toString("base64");
-      keyVersion = version;
+    let keyVersion: number | null = null;
+    if (encryptedPayload) {
+      const { ciphertextB64: c, ivB64: iv, tagB64: tag, keyVersion: v } = encryptedPayload;
+      if (!c || !iv || !tag || typeof v !== 'number') {
+        throw new BadRequestException('ciphertextB64, ivB64, tagB64 и не подходящий формат keyVersion');
+      }
+      ciphertextB64 = c;
+      ivB64 = iv;
+      tagB64 = tag;
+      keyVersion = v;
     }
 
     //запись в бд
@@ -218,7 +217,10 @@ export class ChatService {
       senderId,
       metadata: saved.metadata,
       createdAt: saved.createdAt,
-      payload: encryptedPayloadBuffer ? encryptedPayloadBuffer.toString("base64") : null,
+      ciphertextB64: saved.ciphertextB64,
+      ivB64: saved.ivB64,
+      tagB64: saved.tagB64,
+      keyVersion: saved.keyVersion,
       replyToId: saved.replyToId,
       pinned: saved.pinned,
     };
@@ -249,42 +251,48 @@ export class ChatService {
 
     const rows = await qb.getMany();
 
-    const dekCache = new Map<number, Buffer>();
-    const items = await Promise.all(
-      rows.map(async (m) => {
-        let encryptedPayload: string | null = null;
-        if (m.ciphertextB64 && m.ivB64 && m.tagB64 && typeof m.keyVersion === 'number') {
-          let dek = dekCache.get(m.keyVersion);
-          if (!dek) {
-            const res = await this.chatKeyService.getDekByVersion(chatId, m.keyVersion);
-            dek = res.dek;
-            dekCache.set(m.keyVersion, dek);
-          }
-          const aad = this.buildMessageAad(chatId, m.id, m.senderId, m.keyVersion);
-          const plaintext = this.cryptoService.decryptBytes(
-            Buffer.from(m.ciphertextB64, 'base64'),
-            dek,
-            aad,
-            Buffer.from(m.ivB64, 'base64'),
-            Buffer.from(m.tagB64, 'base64'),
-          );
-          encryptedPayload = plaintext.toString('base64');
-        }
-
-        return {
-          id: m.id,
-          chatId,
-          senderId: m.senderId,
-          metadata: m.metadata,
-          createdAt: m.createdAt,
-          encryptedPayload,
-          replyToId: m.replyToId ?? null,
-          pinned: m.pinned,
-        };
-      }),
-    );
+    const items = rows.map((m) => ({
+      id: m.id,
+      chatId,
+      senderId: m.senderId,
+      metadata: m.metadata,
+      createdAt: m.createdAt,
+      ciphertextB64: m.ciphertextB64,
+      ivB64: m.ivB64,
+      tagB64: m.tagB64,
+      keyVersion: m.keyVersion,
+      replyToId: m.replyToId ?? null,
+      pinned: m.pinned,
+    }));
 
     return items;
+  }
+
+  async getChatKeyForUser(userId: string, chatId: string) {
+    const inChat = await this.isUserInChat(userId, chatId);
+    if (!inChat) throw new ForbiddenException('Юзер не в чате');
+
+    const userKey = await this.userPublicKeyRepo.findOne({
+      where: { userId, isActive: true },
+      order: { createdAt: 'DESC' },
+    });
+    if (!userKey) throw new NotFoundException('Не найден публичный ключ для этого юзера');
+
+    const { dek, version } = await this.chatKeyService.getActiveDek(chatId);
+    const pem = this.normalizePem(userKey.publicKeyPem);
+    const wrapped = publicEncrypt(
+      {
+        key: pem,
+        padding: constants.RSA_PKCS1_OAEP_PADDING,
+        oaepHash: 'sha256',
+      },
+      dek,
+    );
+    return {
+      wrappedDekForClientB64: wrapped.toString('base64'),
+      version,
+      keyId: userKey.keyId ?? null,
+    };
   }
   
   async joinChat(userId: string, chatId: string) {
@@ -567,5 +575,9 @@ export class ChatService {
       .getMany();
 
     return { chats, messages };
+  }
+
+  private normalizePem(pem: string): string {
+    return pem.includes('\\n') ? pem.replace(/\\n/g, '\n') : pem;
   }
 }

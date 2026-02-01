@@ -10,8 +10,10 @@ import { ChatFile } from './entities/chat-file.entity';
 import { MessageReaction } from './entities/message-reaction.entity';
 import { MessageReadStatus } from './entities/message-read-status.entity';
 import { ChatKeyEntity } from './entities/chat-key.entity';
+import { UserPublicKeyEntity } from './entities/userPublicKey.entity';
 import { FilesModule } from './files/files.module';
 import { ConfigModule } from '@nestjs/config';
+import { CryptoModule } from './crypto/crypto.module';
 
 
 @Module({
@@ -19,12 +21,13 @@ import { ConfigModule } from '@nestjs/config';
     TypeOrmModule.forRoot({
       type: 'postgres',
       url: process.env.DATABASE_URL || 'postgresql://chat_user:chat_pass@127.0.0.1:5432/chat_db?schema=public',
-      entities: [User, Chat, ChatParticipant, Message, ChatFile, MessageReaction, MessageReadStatus, ChatKeyEntity],
+      entities: [User, Chat, ChatParticipant, Message, ChatFile, MessageReaction, MessageReadStatus, ChatKeyEntity, UserPublicKeyEntity],
       synchronize: true, 
     }),
     AuthModule,
     ChatModule,
     FilesModule,
+    CryptoModule,
     ConfigModule.forRoot({ isGlobal: true }),
   ],
   

@@ -12,3 +12,4 @@ TestChat2.ts
 src/auth/auth.controller.spec.ts
 src/chats/chat.controller.spec.ts
 src/chats/chat.service.spec.ts
+e2e

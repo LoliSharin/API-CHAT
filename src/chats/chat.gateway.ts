@@ -100,14 +100,25 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   
   // отправка сообщения
   @SubscribeMessage('send_message')
-  async onSendMessage(@ConnectedSocket() client: Socket, @MessageBody() payload: { chatId: string; encryptedPayload?: string; metadata?: any }) {
+  async onSendMessage(
+    @ConnectedSocket() client: Socket,
+    @MessageBody()
+    payload: {
+      chatId: string;
+      ciphertextB64?: string;
+      ivB64?: string;
+      tagB64?: string;
+      keyVersion?: number;
+      metadata?: any;
+    },
+  ) {
     const userId = await this.resolveUserId(client);
     if (!userId) {
       client.emit('error', { message: 'Unauthorized' });
       return;
     }
 
-    const { chatId, encryptedPayload, metadata } = payload;
+    const { chatId, ciphertextB64, ivB64, tagB64, keyVersion, metadata } = payload;
     if (!chatId) {
       client.emit('error', { message: 'chatId required' });
       return;
@@ -134,8 +145,10 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       }
     }
 
-    const buff = encryptedPayload ? Buffer.from(encryptedPayload, 'base64') : null;
-    const saved = await this.chatService.createMessage(userId, chatId, buff, metadata || {});
+    const encPayload = ciphertextB64
+      ? { ciphertextB64, ivB64, tagB64, keyVersion }
+      : null;
+    const saved = await this.chatService.createMessage(userId, chatId, encPayload, metadata || {});
 
     // бродкаст сообщения
     this.server.to(`chat:${chatId}`).emit('message.new', saved);
